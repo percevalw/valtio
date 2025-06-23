@@ -1,5 +1,8 @@
-import { useLayoutEffect } from 'react'
+import { useLayoutEffect, useRef } from 'react'
 import { useSnapshot } from '../../react.ts'
+
+const isObject = (x: unknown): x is object =>
+  typeof x === 'object' && x !== null
 
 const DUMMY_SYMBOL = Symbol()
 
@@ -34,17 +37,37 @@ export function useProxy<T extends object>(
   // eslint-disable-next-line @typescript-eslint/no-unused-expressions
   ;(snapshot as any)[DUMMY_SYMBOL]
 
-  let isRendering = true
+  const isRenderingRef = useRef(true)
+  isRenderingRef.current = true
   useLayoutEffect(() => {
     // This is an intentional hack
     // It might not work with React Compiler
-    // eslint-disable-next-line react-hooks/react-compiler, react-hooks/exhaustive-deps
-    isRendering = false
+
+    isRenderingRef.current = false
   })
 
-  return new Proxy(proxy, {
-    get(target, prop) {
-      return isRendering ? snapshot[prop as keyof T] : target[prop as keyof T]
-    },
-  })
+  const cacheRef = useRef(new WeakMap<object, { proxy: any; snap: any }>())
+
+  const createDeepProxy = (targetObj: any, snapObj: any): any => {
+    if (!isObject(targetObj)) {
+      return isRenderingRef.current ? snapObj : targetObj
+    }
+    let cached = cacheRef.current.get(targetObj)
+    if (!cached) {
+      cached = { snap: snapObj, proxy: undefined as unknown as any }
+      cached.proxy = new Proxy(targetObj, {
+        get(t, p) {
+          const childTarget = (t as any)[p]
+          const childSnap = cached!.snap?.[p]
+          return createDeepProxy(childTarget, childSnap)
+        },
+      })
+      cacheRef.current.set(targetObj, cached)
+    } else {
+      cached.snap = snapObj
+    }
+    return cached.proxy
+  }
+
+  return createDeepProxy(proxy, snapshot) as T
 }
